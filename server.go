@@ -63,8 +63,23 @@ type response struct {
 // is also registered), otherwise the child gets the query.
 // ServeMux is also safe for concurrent access from multiple goroutines.
 type ServeMux struct {
-	z map[string]Handler
-	m *sync.RWMutex
+	z           map[string]Handler
+	m           *sync.RWMutex
+	middlewares []func(Handler) Handler
+}
+
+// Use appends a middleware handler to the Mux
+func (m *ServeMux) Use(middlewares ...func(Handler) Handler) {
+	/*
+		if m.z != nil {
+			panic("dns: all middlewares must be defined before handlers on a mux")
+		}
+	*/
+	m.middlewares = append(m.middlewares, middlewares...)
+}
+
+func (m *ServeMux) Middlewares() Middlewares {
+	return m.middlewares
 }
 
 // NewServeMux allocates and returns a new ServeMux.
@@ -178,7 +193,19 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 
 // HandleFunc adds a handler function to the ServeMux for pattern.
 func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, *Msg)) {
-	mux.Handle(pattern, HandlerFunc(handler))
+	middlewares := mux.Middlewares()
+	// return early if no middlewares are present
+	if len(middlewares) == 0 {
+		mux.Handle(pattern, HandlerFunc(handler))
+		return
+	}
+
+	// wrap the middlewares
+	h := middlewares[len(middlewares)-1](HandlerFunc(handler))
+	for i := len(middlewares) - 2; i >= 0; i-- {
+		h = middlewares[i](h)
+	}
+	mux.Handle(pattern, h)
 }
 
 // HandleRemove deregistrars the handler specific for pattern from the ServeMux.
@@ -717,3 +744,7 @@ func (w *response) Close() error {
 	}
 	return nil
 }
+
+// Middlewares is a slice of middleware handlers with methods to create
+// middleware chains.
+type Middlewares []func(Handler) Handler
